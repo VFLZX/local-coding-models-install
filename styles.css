@@ -1,0 +1,57 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --bg: #111318;
+  --panel: #191c23;
+  --line: #292d37;
+  --text: #e8eaf0;
+  --muted: #a0a6b4;
+  --accent: #aa99ff;
+  --green: #6bd9a7;
+}
+
+* { box-sizing: border-box; }
+body { min-width: 320px; min-height: 100vh; margin: 0; color: var(--text); background: var(--bg); }
+a { color: inherit; }
+.topbar { height: 68px; display: flex; align-items: center; justify-content: space-between; padding: 0 max(24px, calc((100vw - 1080px) / 2)); border-bottom: 1px solid var(--line); }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-size: 19px; font-weight: 720; letter-spacing: -.8px; }
+.brand-mark { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 9px; color: #14131d; background: var(--accent); font: 800 10px/1 ui-monospace, monospace; letter-spacing: -1px; }
+.brand-dot { color: var(--accent); }
+.topbar-note, .eyebrow, .card-number { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: 1.4px; }
+.topbar-note { display: flex; align-items: center; gap: 9px; }
+.status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px #6bd9a755; }
+main { width: min(1080px, calc(100% - 48px)); margin: 0 auto; }
+.hero { max-width: 760px; padding: 96px 0 56px; }
+.hero .eyebrow { color: var(--accent); }
+h1 { max-width: 720px; margin: 18px 0; font-size: clamp(42px, 7vw, 72px); font-weight: 650; letter-spacing: -4px; line-height: 1.04; }
+h1 span { color: var(--accent); }
+.intro { max-width: 650px; margin: 0; color: #b4bac7; font-size: 17px; line-height: 1.8; }
+.notice { display: flex; align-items: flex-start; gap: 13px; max-width: 660px; margin-top: 30px; padding: 16px 18px; border: 1px solid #625987; border-radius: 10px; background: #211f2a; }
+.notice-icon { display: grid; width: 20px; height: 20px; flex: 0 0 20px; place-items: center; border-radius: 50%; color: #16131e; background: var(--accent); font-size: 12px; font-weight: 800; }
+.notice p { margin: 0; color: #d7d2ef; font-size: 13px; line-height: 1.65; }
+.notice strong { color: #fff; }
+.content-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.card { min-height: 230px; padding: 25px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.card-number { color: #8d94a3; font-size: 9px; }
+.card h2, .next-step h2 { margin: 24px 0 10px; font-size: 20px; font-weight: 620; letter-spacing: -.5px; }
+.card p, .next-step p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.8; }
+.text-link { display: inline-flex; gap: 7px; margin-top: 15px; color: var(--accent); font-size: 12px; font-weight: 650; text-decoration: none; }
+.text-link:hover { color: #c1b6ff; text-decoration: underline; }
+.next-step { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 16px 0 72px; padding: 25px; border: 1px solid #30343e; border-radius: 12px; background: #15171e; }
+.next-step .eyebrow { margin: 0; }
+.next-step h2 { margin: 10px 0 7px; }
+.next-step p:not(.eyebrow) { max-width: 650px; }
+.status-pill { display: inline-flex; align-items: center; gap: 9px; flex: 0 0 auto; padding: 10px 12px; border: 1px solid #345744; border-radius: 99px; color: #b9e8d1; background: #1c2923; font-size: 11px; }
+footer { display: flex; justify-content: space-between; gap: 20px; padding: 20px max(24px, calc((100vw - 1080px) / 2)); border-top: 1px solid var(--line); color: #777e8d; font-size: 10px; }
+@media (max-width: 760px) {
+  .topbar { height: 60px; padding: 0 20px; }
+  main { width: min(100% - 36px, 560px); }
+  .hero { padding: 68px 0 37px; }
+  h1 { letter-spacing: -2.5px; }
+  .intro { font-size: 15px; }
+  .content-grid { grid-template-columns: 1fr; }
+  .card { min-height: 0; padding: 22px; }
+  .card h2 { margin-top: 17px; }
+  .next-step { align-items: flex-start; flex-direction: column; margin-bottom: 48px; }
+  footer { flex-direction: column; padding: 18px 20px; }
+}
