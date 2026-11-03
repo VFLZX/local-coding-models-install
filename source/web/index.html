@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111318">
+    <meta name="coder-token" content="__CODER_TOKEN__">
+    <meta name="coder-version" content="2.6.0">
+    <meta name="description" content="Install Local Coding Models (LCM), a private coding assistant that connects to Ollama on your own computer.">
+    <title>Local Coding Models (LCM) — Local AI coding assistant</title>
+    <link rel="icon" href="./icon.svg?v=2.6.0" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest?v=2.6.0">
+    <link rel="stylesheet" href="./styles.css?v=2.6.0">
+    <script src="./app.js?v=2.6.0" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="Local Coding Models home">
+          <span class="brand-mark" aria-hidden="true">&lt;/&gt;</span>
+          <span>LCM<span class="brand-dot">.</span></span>
+        </a>
+        <div class="topbar-center"><span class="local-indicator"></span> LOCAL MODEL · WEB RESEARCH IS OPT-IN</div>
+        <div class="topbar-actions">
+          <span id="connection-label" class="connection-label">Connecting to Ollama…</span>
+          <button id="web-button" class="button button-quiet" type="button">Web <span aria-hidden="true">↗</span></button>
+          <button id="history-button" class="button button-quiet" type="button">History</button>
+          <button id="install-button" class="button button-quiet install-button">Install app <span aria-hidden="true">↗</span></button>
+          <a class="button button-quiet companion-download" href="https://vflzx.github.io/local-coding-models/downloads/LCM-2.6.0-Windows.zip">Get LCM <span aria-hidden="true">↓</span></a>
+          <button id="settings-button" class="icon-button" title="Settings" aria-label="Settings">⚙</button>
+          <button id="new-chat-button" class="icon-button" title="Start a new chat" aria-label="Start a new chat">＋</button>
+        </div>
+      </header>
+      <div id="update-banner" class="update-banner" role="status" aria-live="polite" hidden>
+        <span id="update-message">LCM update available.</span>
+        <button id="update-action" class="button button-primary" type="button">Reload</button>
+      </div>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-heading">
+            <span class="eyebrow">YOUR WORKSPACE</span>
+            <button id="add-files-button" class="icon-button subtle" title="Add files" aria-label="Add files">＋</button>
+          </div>
+          <button id="open-project-button" class="project-button">
+            <span class="folder-icon" aria-hidden="true">▰</span>
+            <span><strong>Choose project folder</strong><small>Enable reviewed edits and commands</small></span>
+            <span class="chevron" aria-hidden="true">›</span>
+          </button>
+          <input id="files-input" type="file" multiple hidden>
+          <div id="project-name" class="project-name" hidden></div>
+          <div class="project-actions">
+            <button id="create-file-button" class="text-button" disabled>＋ Create file</button>
+            <button id="run-command-button" class="text-button" disabled>› Run command</button>
+          </div>
+          <div class="file-toolbar">
+            <span class="eyebrow">FILES <span id="file-total" class="count-pill">0</span></span>
+            <button id="select-visible-button" class="text-button" disabled>Select visible</button>
+          </div>
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="file-search" type="search" placeholder="Filter files…" autocomplete="off">
+            <kbd>/</kbd>
+          </label>
+          <div id="file-list" class="file-list" aria-label="Project files">
+            <div class="empty-files">Choose a folder or add files to get started.</div>
+          </div>
+          <div class="sidebar-bottom">
+            <div class="context-note"><span class="lock-icon" aria-hidden="true">◈</span><span id="context-status">Only files you select are shared with your local model.</span></div>
+            <button id="local-info-button" class="local-info-button"><span class="green-dot"></span> Local AI <span class="info-arrow">↗</span></button>
+          </div>
+        </aside>
+
+        <section class="chat-panel" aria-label="Local Coding Models chat">
+          <div class="chat-header">
+            <div>
+              <span class="eyebrow">CODING SESSION</span>
+              <h1>What are we building?</h1>
+              <p>Ask a question, explore an idea, or get help with your code.</p>
+            </div>
+            <div class="model-controls">
+              <label class="model-picker-wrap">
+                <span class="model-symbol" aria-hidden="true">✳</span>
+                <select id="model-select" aria-label="Local Ollama model" disabled>
+                  <option value="">Loading local models…</option>
+                </select>
+                <span class="select-chevron" aria-hidden="true">⌄</span>
+              </label>
+              <button id="refresh-models-button" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button>
+            </div>
+          </div>
+
+          <div id="conversation" class="conversation" aria-live="polite">
+            <div id="welcome-card" class="welcome-card">
+              <div class="welcome-orbit"><span>&lt;/&gt;</span></div>
+              <span class="eyebrow">YOUR PRIVATE CODING PARTNER</span>
+              <h2>Ideas into working code.</h2>
+              <p>Install this web app, then start the LCM companion on your PC. It connects this app to your own local Ollama model.</p>
+              <a class="button button-primary companion-cta" href="https://vflzx.github.io/local-coding-models/downloads/LCM-2.6.0-Windows.zip">Download LCM for Windows ↓</a>
+              <div class="suggestion-grid">
+                <button class="suggestion" data-prompt="Help me understand this codebase.">⌘ <span>Understand a codebase</span><b>↗</b></button>
+                <button class="suggestion" data-prompt="Review the selected files for potential bugs.">⌁ <span>Find a bug</span><b>↗</b></button>
+                <button class="suggestion" data-prompt="Help me design a solution for this problem.">✳ <span>Plan an implementation</span><b>↗</b></button>
+                <button class="suggestion" data-prompt="Explain this code step by step.">≡ <span>Explain some code</span><b>↗</b></button>
+              </div>
+            </div>
+            <div id="messages" class="messages"></div>
+          </div>
+
+          <div class="composer-wrap">
+            <form id="composer" class="composer">
+              <textarea id="prompt-input" rows="1" placeholder="Message LCM…" aria-label="Message LCM"></textarea>
+              <div class="composer-footer">
+                <div class="composer-hints">
+                  <span id="selected-count" class="selected-count" hidden></span>
+                  <span class="privacy-hint"><span class="tiny-lock">◈</span> Local model</span>
+                </div>
+                <div class="composer-actions">
+                  <span class="enter-hint">Enter to send <kbd>↵</kbd></span>
+                  <button id="send-button" class="send-button" type="submit" aria-label="Send message" disabled><span>↑</span></button>
+                </div>
+              </div>
+            </form>
+            <p class="safety-note">Every file write and command requires your review and approval. Chat replies never run commands automatically.</p>
+          </div>
+        </section>
+      </main>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+      <dialog id="install-dialog" class="dialog-card">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">↗</div><span class="eyebrow">INSTALL LCM</span>
+        <h2>Local Coding Models, on your desktop.</h2>
+        <p>In Microsoft Edge or Google Chrome, choose <strong>Install LCM</strong> in the address bar, or open the browser menu and select <strong>Install Local Coding Models</strong> / <strong>Install page as app</strong>. This installs the web interface from GitHub Pages.</p>
+        <p>Chat, project access, and Ollama require the <a href="https://vflzx.github.io/local-coding-models/downloads/LCM-2.6.0-Windows.zip">LCM local companion</a> running on your own PC. The companion opens this app with a temporary local connection setting.</p>
+        <button class="button button-primary dialog-done" value="close">Got it</button>
+      </dialog>
+
+      <dialog id="local-dialog" class="dialog-card">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon local-dialog-icon">◈</div><span class="eyebrow">PRIVATE BY DESIGN</span>
+        <h2>Your AI stays on this device.</h2>
+        <p>This GitHub Pages app connects to the LCM companion running on your own computer, which talks to local Ollama. Download and start the companion before using chat or project features. Selected files go only to your local model.</p>
+        <p><a href="https://vflzx.github.io/local-coding-models/downloads/LCM-2.6.0-Windows.zip">Download the free LCM Windows companion</a></p>
+        <div class="local-status-card"><span class="green-dot"></span><span>Local browser app</span><strong>127.0.0.1</strong></div>
+        <div class="local-status-card"><span class="green-dot"></span><span>Model connection</span><strong>Ollama</strong></div>
+        <button class="button button-primary dialog-done" value="close">Sounds good</button>
+      </dialog>
+
+      <dialog id="unlock-dialog" class="dialog-card unlock-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">✳</div><span class="eyebrow">LOCAL UNLOCK</span>
+        <h2>Enable expanded context</h2>
+        <p>Enter your local unlock code. Your code is verified on this device and is never sent to Ollama.</p>
+        <form id="unlock-form">
+          <input id="unlock-input" type="password" autocomplete="off" placeholder="Enter code" required>
+          <p id="unlock-error" class="unlock-error" hidden></p>
+          <button class="button button-primary dialog-done" type="submit">Unlock context</button>
+        </form>
+      </dialog>
+
+      <dialog id="settings-dialog" class="dialog-card settings-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close settings">×</button></form>
+        <div class="dialog-icon">⚙</div><span class="eyebrow">LCM SETTINGS</span>
+        <h2>Settings</h2>
+        <section class="settings-section">
+          <h3>GitHub profile</h3>
+          <p>Connect with GitHub’s OAuth device flow to show your profile in this local session. This does not create or sign you into an LCM account and does not grant repository access. LCM never asks for your GitHub password or retains an access token. Sign-in traffic goes to GitHub.com; model requests and selected files remain local. Disconnect clears the local profile label; revoke the OAuth App in <a href="https://github.com/settings/applications" target="_blank" rel="noopener noreferrer">GitHub settings</a> to revoke authorization.</p>
+          <label class="field-label" for="github-client-id">GitHub OAuth App client ID</label>
+          <input id="github-client-id" autocomplete="off" spellcheck="false" placeholder="Public client ID (not a secret)">
+          <p id="github-setup-note" class="settings-status">Use an OAuth App with device flow enabled. Create one in <a href="https://github.com/settings/developers" target="_blank" rel="noopener noreferrer">GitHub Developer settings</a>; enter only its public client ID here. If LCM is preconfigured, you can connect without entering this value.</p>
+          <label class="github-email-consent"><input id="github-email-consent" type="checkbox"> Also share my primary verified GitHub email for this local session (adds the <code>user:email</code> permission).</label>
+          <div class="settings-actions">
+            <button id="github-connect-button" class="button button-primary" type="button">Connect GitHub</button>
+            <button id="github-disconnect-button" class="button" type="button" hidden>Disconnect</button>
+          </div>
+          <p id="github-status" class="settings-status" role="status">No GitHub profile linked.</p>
+          <div id="github-device-step" class="github-device-step" hidden>
+            <p>Open GitHub’s official verification page and enter this one-time code:</p>
+            <code id="github-user-code" class="github-user-code"></code>
+            <a id="github-verify-link" class="button" href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">Open GitHub verification ↗</a>
+            <button id="github-cancel-button" class="text-button" type="button">Cancel sign-in</button>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h3>Plans</h3>
+          <div class="plan-card">
+            <div><strong>More storage</strong><small>USD $7 monthly</small></div>
+            <button class="button" type="button" disabled>Checkout unavailable</button>
+          </div>
+          <div class="plan-card">
+            <div><strong>Infinite plan</strong><small>USD $25 one-time. Removes LCM's app-side context limits; the selected model and device still impose limits.</small></div>
+            <button class="button" type="button" disabled>Checkout unavailable</button>
+          </div>
+          <p class="settings-status">Payments are not configured. No checkout or payment collection is active.</p>
+        </section>
+        <section class="settings-section">
+          <h3>Redeem a local plan code</h3>
+          <p>Codes are checked and saved on this device. Expanded context does not increase your model's context window or hardware capacity.</p>
+          <form id="settings-unlock-form" class="settings-actions">
+            <input id="settings-unlock-input" type="password" autocomplete="off" placeholder="Enter code" required>
+            <button class="button button-primary" type="submit">Redeem</button>
+          </form>
+          <p id="settings-unlock-status" class="settings-status" role="status">No expanded-context code redeemed.</p>
+        </section>
+      </dialog>
+
+      <dialog id="history-dialog" class="dialog-card settings-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close history">×</button></form>
+        <div class="dialog-icon">◷</div><span class="eyebrow">ON THIS DEVICE</span>
+        <h2>Chats &amp; projects</h2>
+        <p>Chat transcripts and recent project paths are saved locally in this browser. Project files stay in their folders; selected file and web-page contents are not copied into chat history.</p>
+        <section class="settings-section">
+          <h3>Recent chats</h3>
+          <div id="chat-history-list" class="history-list"></div>
+        </section>
+        <section class="settings-section">
+          <h3>Recent projects</h3>
+          <div id="recent-project-list" class="history-list"></div>
+        </section>
+      </dialog>
+
+      <dialog id="web-dialog" class="dialog-card settings-dialog web-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close web research">×</button></form>
+        <div class="dialog-icon">⌕</div><span class="eyebrow">WEB RESEARCH · READ ONLY</span>
+        <h2>Search the web</h2>
+        <p>Search queries go to DuckDuckGo, and pages you choose to read are fetched from their websites. This is external internet traffic; prompts and Ollama inference stay local. LCM only reads public HTTPS pages: it does not click page controls, submit forms, run page scripts, or sign in to websites.</p>
+        <form id="web-search-form" class="web-search-form">
+          <input id="web-search-input" autocomplete="off" placeholder="Search public web pages" aria-label="Web search query" required>
+          <button id="web-search-submit" class="button button-primary" type="submit">Search</button>
+        </form>
+        <p id="web-status" class="settings-status" role="status">Search only when you press Search.</p>
+        <div id="web-results" class="web-results"></div>
+        <section id="web-reader" class="web-reader" hidden>
+          <div class="web-reader-header">
+            <div><h3 id="web-page-title"></h3><a id="web-page-url" target="_blank" rel="noopener noreferrer"></a></div>
+            <label class="web-context-toggle"><input id="web-include-checkbox" type="checkbox"> Include in chat context</label>
+          </div>
+          <pre id="web-page-content" class="web-page-content"></pre>
+        </section>
+      </dialog>
+
+      <dialog id="file-dialog" class="dialog-card editor-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">✎</div><span class="eyebrow">PROJECT FILE</span>
+        <h2 id="file-dialog-title">Edit file</h2>
+        <form id="file-form">
+          <label class="field-label" for="file-path-input">Project-relative path</label>
+          <input id="file-path-input" autocomplete="off" required>
+          <label class="field-label" for="file-content-input">File content</label>
+          <textarea id="file-content-input" rows="12" spellcheck="false"></textarea>
+          <p class="dialog-note">The file is not written until you review the exact patch and approve it.</p>
+          <button class="button button-primary dialog-done" type="submit">Review changes</button>
+        </form>
+      </dialog>
+
+      <dialog id="file-review-dialog" class="dialog-card review-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">⌁</div><span class="eyebrow">REVIEW REQUIRED</span>
+        <h2>Approve file change?</h2>
+        <p id="file-review-path" class="review-target"></p>
+        <pre id="file-diff" class="review-preview"></pre>
+        <p id="file-review-error" class="action-error" hidden></p>
+        <div class="review-actions">
+          <button id="file-cancel-button" class="button" type="button">Cancel</button>
+          <button id="file-approve-button" class="button button-primary" type="button">Approve &amp; save</button>
+        </div>
+      </dialog>
+
+      <dialog id="command-dialog" class="dialog-card editor-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">›_</div><span class="eyebrow">LOCAL COMMAND</span>
+        <h2>Run a project command</h2>
+        <p>Commands are typed by you and run only after a separate review. Commands suggested in chat are never executed automatically.</p>
+        <form id="command-form">
+          <label class="field-label" for="command-input">Command</label>
+          <input id="command-input" autocomplete="off" placeholder="python -m pytest" required>
+          <p id="command-error" class="action-error" hidden></p>
+          <button class="button button-primary dialog-done" type="submit">Review command</button>
+        </form>
+      </dialog>
+
+      <dialog id="command-review-dialog" class="dialog-card review-dialog">
+        <form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="Close">×</button></form>
+        <div class="dialog-icon">!</div><span class="eyebrow">REVIEW REQUIRED</span>
+        <h2 id="command-review-title">Approve command?</h2>
+        <p class="field-label">Command</p>
+        <pre id="command-preview" class="review-preview command-preview"></pre>
+        <p class="field-label">Working folder</p>
+        <pre id="command-cwd" class="review-target"></pre>
+        <p id="command-review-error" class="action-error" hidden></p>
+        <pre id="command-result" class="command-result" hidden></pre>
+        <div class="review-actions">
+          <button id="command-cancel-button" class="button" type="button">Cancel</button>
+          <button id="command-approve-button" class="button button-primary" type="button">Approve &amp; run</button>
+        </div>
+      </dialog>
+    </div>
+  </body>
+</html>
