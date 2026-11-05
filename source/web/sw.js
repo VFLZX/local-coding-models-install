@@ -1,5 +1,5 @@
-const APP_VERSION = "2.6.0";
-const CACHE_NAME = "coder-shell-v12";
+const APP_VERSION = "2.7.0";
+const CACHE_NAME = "coder-shell-v13";
 const APP_ROOT = new URL("./", self.registration.scope);
 const IS_PUBLIC_APP = self.location.origin === "https://vflzx.github.io";
 const SHELL_ASSETS = [

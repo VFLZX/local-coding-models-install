@@ -150,3 +150,36 @@ button { color: inherit; }
   .plan-card { align-items: flex-start; flex-direction: column; }
   .plan-card small { max-width: none; }
 }
+
+.local-approval-panel {
+  max-width: 900px;
+  margin: 4vh auto;
+  padding: 28px;
+  color: var(--text, #eef0f4);
+  background: var(--panel, #191c23);
+  border: 1px solid var(--line, #323640);
+  border-radius: 16px;
+  box-shadow: 0 18px 60px #0008;
+}
+.local-approval-panel h1 { margin: 0 0 12px; }
+.local-approval-status { color: var(--muted, #abb0bc); }
+.local-approval-details {
+  max-height: 65vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 18px;
+  background: #0e1015;
+  border: 1px solid var(--line, #323640);
+  border-radius: 10px;
+  font: 13px/1.55 ui-monospace, Consolas, monospace;
+}
+.local-approval-actions { display: flex; gap: 12px; margin-top: 18px; }
+.chain-approval-link { margin-top: 14px; }
+@media (max-width: 760px) {
+  .model-controls { flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
+}
+@media (max-width: 520px) {
+  .local-approval-panel { margin: 2vh 10px; padding: 16px; }
+  .local-approval-actions { flex-direction: column; }
+}

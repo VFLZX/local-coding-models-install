@@ -22,6 +22,9 @@ const appVersion = document.querySelector('meta[name="coder-version"]').content;
 const elements = {
   connection: document.querySelector("#connection-label"),
   model: document.querySelector("#model-select"),
+  workflow: document.querySelector("#workflow-select"),
+  largeModel: document.querySelector("#large-model-select"),
+  largeModelWrap: document.querySelector("#large-model-wrap"),
   refresh: document.querySelector("#refresh-models-button"),
   install: document.querySelector("#install-button"),
   updateBanner: document.querySelector("#update-banner"),
@@ -32,6 +35,8 @@ const elements = {
   historyDialog: document.querySelector("#history-dialog"),
   chatHistoryList: document.querySelector("#chat-history-list"),
   recentProjectList: document.querySelector("#recent-project-list"),
+  clearChats: document.querySelector("#clear-chats-button"),
+  clearProjects: document.querySelector("#clear-projects-button"),
   webDialog: document.querySelector("#web-dialog"),
   webSearchForm: document.querySelector("#web-search-form"),
   webSearchInput: document.querySelector("#web-search-input"),
@@ -79,6 +84,7 @@ const elements = {
   fileReviewPath: document.querySelector("#file-review-path"),
   fileDiff: document.querySelector("#file-diff"),
   fileReviewError: document.querySelector("#file-review-error"),
+  fileApprovalLink: document.querySelector("#file-approval-link"),
   fileApprove: document.querySelector("#file-approve-button"),
   fileCancel: document.querySelector("#file-cancel-button"),
   commandDialog: document.querySelector("#command-dialog"),
@@ -90,6 +96,7 @@ const elements = {
   commandCwd: document.querySelector("#command-cwd"),
   commandReviewTitle: document.querySelector("#command-review-title"),
   commandReviewError: document.querySelector("#command-review-error"),
+  commandApprovalLink: document.querySelector("#command-approval-link"),
   commandResult: document.querySelector("#command-result"),
   commandApprove: document.querySelector("#command-approve-button"),
   commandCancel: document.querySelector("#command-cancel-button"),
@@ -203,12 +210,15 @@ async function refreshModels() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not load local models.");
     const previousModel = elements.model.value;
+    const previousLargeModel = elements.largeModel.value;
     elements.model.replaceChildren();
+    elements.largeModel.replaceChildren();
     for (const name of result.models) {
       const option = document.createElement("option");
       option.value = name;
       option.textContent = name;
       elements.model.append(option);
+      elements.largeModel.append(option.cloneNode(true));
     }
     if (!result.models.length) {
       const option = document.createElement("option");
@@ -220,6 +230,9 @@ async function refreshModels() {
     } else {
       if (result.models.includes(previousModel)) elements.model.value = previousModel;
       elements.model.disabled = false;
+      if (result.models.includes(previousLargeModel)) elements.largeModel.value = previousLargeModel;
+      else if (result.models.length > 1) elements.largeModel.selectedIndex = result.models.length - 1;
+      elements.largeModel.disabled = result.models.length < 2;
       setConnection(`Ollama ready · ${result.models.length} model${result.models.length === 1 ? "" : "s"}`, "ready");
     }
   } catch (error) {
@@ -408,7 +421,10 @@ function updateSelectedCount() {
 }
 
 function updateSendButton() {
-  elements.send.disabled = state.busy || !elements.prompt.value.trim() || !elements.model.value;
+  const chainReady = elements.workflow.value !== "chain" || (elements.largeModel.value && elements.largeModel.value !== elements.model.value);
+  elements.largeModelWrap.hidden = elements.workflow.value !== "chain";
+  elements.model.setAttribute("aria-label", elements.workflow.value === "chain" ? "Small local Ollama model" : "Local Ollama model");
+  elements.send.disabled = state.busy || !elements.prompt.value.trim() || !elements.model.value || !chainReady;
 }
 
 function appendMessage(role, content, options = {}) {
@@ -497,6 +513,7 @@ async function sendMessage(text) {
     return;
   }
   state.messages.push(userMessage);
+  const chainMode = elements.workflow.value === "chain";
   appendMessage("user", userMessage.content);
   if (includedFiles.length) showToast(`Sending ${includedFiles.length} selected context source${includedFiles.length === 1 ? "" : "s"} to your local model.`);
   await saveCurrentChat();
@@ -505,13 +522,13 @@ async function sendMessage(text) {
   replyBody.classList.add("typing-dots");
   state.busy = true;
   elements.send.disabled = true;
-  setConnection(`Generating · ${elements.model.value}`);
+  setConnection(chainMode ? `Chain · ${elements.model.value} → ${elements.largeModel.value}` : `Generating · ${elements.model.value}`);
 
   try {
-    const response = await request("/api/chat", {
+    const response = await request(chainMode ? "/api/chain" : "/api/chat", {
       method: "POST",
       body: JSON.stringify({
-        model: elements.model.value,
+        ...(chainMode ? { small_model: elements.model.value, large_model: elements.largeModel.value } : { model: elements.model.value }),
         messages: state.messages,
         files: includedFiles,
       }),
@@ -520,6 +537,7 @@ async function sendMessage(text) {
     const decoder = new TextDecoder();
     let buffered = "";
     let answer = "";
+    let chainStatus = "";
     replyBody.textContent = "";
     replyBody.classList.remove("typing-dots");
     while (true) {
@@ -532,9 +550,18 @@ async function sendMessage(text) {
         const event = JSON.parse(line);
         if (event.notice) showToast(event.notice);
         if (event.error) throw new Error(event.error);
+        if (event.refined_prompt) {
+          chainStatus = `Prompt refined by ${event.small_model}. Automatically handing it to ${event.large_model}.\n\nRefined prompt:\n${event.refined_prompt}\n\n`;
+          replyBody.textContent = chainStatus;
+        }
+        if (event.tool_activity) {
+          chainStatus += `\n${event.tool_activity.replaceAll("_", " ")}…\n`;
+          replyBody.textContent = chainStatus + answer;
+        }
+        if (event.approval_required) addChainApprovalLink(replyBody, event.approval_required);
         if (event.token) {
           answer += event.token;
-          replyBody.textContent = answer;
+          replyBody.textContent = chainStatus + answer;
           elements.conversation.scrollTop = elements.conversation.scrollHeight;
         }
       }
@@ -544,6 +571,7 @@ async function sendMessage(text) {
       const event = JSON.parse(buffered);
       if (event.error) throw new Error(event.error);
       if (event.notice) showToast(event.notice);
+      if (event.approval_required) addChainApprovalLink(replyBody, event.approval_required);
     }
     state.messages.push({ role: "assistant", content: answer });
     await saveCurrentChat();
@@ -562,6 +590,25 @@ async function sendMessage(text) {
     resizePrompt();
     updateSendButton();
   }
+}
+
+function addChainApprovalLink(replyBody, approval) {
+  const link = createApprovalLink(approval);
+  if (!link) return;
+  replyBody.closest(".message")?.append(link);
+}
+
+function createApprovalLink(approval) {
+  let url;
+  try { url = new URL(approval.url); } catch { return null; }
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !/^\d+$/.test(url.port) || !url.searchParams.has("approval")) return null;
+  const link = document.createElement("a");
+  link.className = "button button-primary chain-approval-link";
+  link.textContent = approval.kind === "run_command" ? "Review command on this PC" : "Review file change on this PC";
+  link.href = url.href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
 }
 
 function resizePrompt() {
@@ -653,6 +700,8 @@ function showFileReview(path, content) {
   elements.fileReviewPath.textContent = `${current.root}\\${path}`;
   elements.fileDiff.textContent = diff;
   elements.fileReviewError.hidden = true;
+  elements.fileApprovalLink.hidden = true;
+  elements.fileApprove.hidden = false;
   elements.fileApprove.disabled = false;
   elements.fileReview.showModal();
 }
@@ -660,27 +709,37 @@ function showFileReview(path, content) {
 async function approveFileChange() {
   const pending = state.pendingFile;
   if (!pending) return;
+  const reviewWindow = window.open("about:blank", "_blank");
+  if (reviewWindow) reviewWindow.opener = null;
   elements.fileApprove.disabled = true;
   elements.fileReviewError.hidden = true;
+  elements.fileApprovalLink.hidden = true;
   try {
-    const response = await request("/api/project/write", {
+    const response = await request("/api/action/propose", {
       method: "POST",
       body: JSON.stringify({
+        kind: "write_file",
+        root: pending.root,
         path: pending.path,
         content: pending.content,
-        approved: true,
-        approved_path: pending.path,
-        approved_root: pending.root,
-        approved_content_sha256: await sha256Hex(pending.content),
         expected_sha256: pending.expectedSha256,
       }),
     });
-    await response.json();
-    elements.fileReview.close();
+    const result = await response.json();
+    const link = createApprovalLink(result.approval_required);
+    if (!link) throw new Error("The companion returned an invalid approval link.");
+    if (reviewWindow) reviewWindow.location.href = link.href;
+    else {
+      elements.fileApprovalLink.href = link.href;
+      elements.fileApprovalLink.hidden = false;
+    }
     state.pendingFile = null;
-    await loadProjectFiles();
-    showToast(`Saved ${pending.path}.`);
+    elements.fileApprove.hidden = true;
+    elements.fileCancel.textContent = "Close";
+    elements.fileReviewError.textContent = "Waiting for approval in the local companion. The file is not changed yet.";
+    elements.fileReviewError.hidden = false;
   } catch (error) {
+    if (reviewWindow) reviewWindow.close();
     elements.fileReviewError.textContent = error.message;
     elements.fileReviewError.hidden = false;
     elements.fileApprove.disabled = false;
@@ -699,6 +758,7 @@ function reviewCommand(command) {
   elements.commandCwd.textContent = state.projectRoot;
   elements.commandReviewTitle.textContent = "Approve command?";
   elements.commandReviewError.hidden = true;
+  elements.commandApprovalLink.hidden = true;
   elements.commandResult.hidden = true;
   elements.commandResult.textContent = "";
   elements.commandApprove.hidden = false;
@@ -710,33 +770,35 @@ function reviewCommand(command) {
 async function approveCommand() {
   const command = state.pendingCommand;
   if (!command) return;
+  const reviewWindow = window.open("about:blank", "_blank");
+  if (reviewWindow) reviewWindow.opener = null;
   elements.commandApprove.disabled = true;
   elements.commandReviewError.hidden = true;
+  elements.commandApprovalLink.hidden = true;
   try {
-    const response = await request("/api/project/command", {
+    const response = await request("/api/action/propose", {
       method: "POST",
       body: JSON.stringify({
+        kind: "run_command",
+        root: state.projectRoot,
         command,
-        approved: true,
-        approved_command: command,
-        approved_cwd: state.projectRoot,
       }),
     });
     const result = await response.json();
-    const status = result.timed_out
-      ? "Timed out after 60 seconds."
-      : `Exit code: ${result.exit_code}`;
-    const output = [
-      status,
-      result.stdout ? `\nSTDOUT\n${result.stdout}` : "",
-      result.stderr ? `\nSTDERR\n${result.stderr}` : "",
-    ].join("");
-    elements.commandReviewTitle.textContent = "Command finished";
-    elements.commandResult.textContent = output || "Command finished with no output.";
-    elements.commandResult.hidden = false;
+    const link = createApprovalLink(result.approval_required);
+    if (!link) throw new Error("The companion returned an invalid approval link.");
+    if (reviewWindow) reviewWindow.location.href = link.href;
+    else {
+      elements.commandApprovalLink.href = link.href;
+      elements.commandApprovalLink.hidden = false;
+    }
+    elements.commandReviewTitle.textContent = "Waiting for local approval";
+    elements.commandReviewError.textContent = "The command will not run until you approve it on the local companion page.";
+    elements.commandReviewError.hidden = false;
     elements.commandApprove.hidden = true;
     elements.commandCancel.textContent = "Close";
   } catch (error) {
+    if (reviewWindow) reviewWindow.close();
     elements.commandReviewTitle.textContent = "Command status unknown";
     elements.commandReviewError.textContent = `${error.message} Check the project before trying it again.`;
     elements.commandReviewError.hidden = false;
@@ -788,7 +850,7 @@ async function saveCurrentChat() {
     id: state.currentChatId,
     title: (firstUserMessage?.content || "New chat").slice(0, 100),
     updatedAt: Date.now(),
-    projectRoot: state.projectRoot,
+    projectRoot: recentProjects().includes(state.projectRoot) ? state.projectRoot : null,
     messages: state.messages.map((message) => ({ ...message })),
   };
   try {
@@ -970,6 +1032,55 @@ elements.historyButton.addEventListener("click", async () => {
   elements.historyDialog.showModal();
   await renderHistory();
 });
+elements.clearChats.addEventListener("click", async () => {
+  if (!window.confirm("Delete all saved chat transcripts from this browser? This cannot be undone.")) return;
+  try {
+    const database = await openHistoryDb();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction("chats", "readwrite");
+      transaction.objectStore("chats").clear();
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error("Could not clear saved chats."));
+      transaction.onabort = () => reject(transaction.error || new Error("Could not clear saved chats."));
+    });
+    state.currentChatId = null;
+    state.messages = [];
+    elements.messages.replaceChildren();
+    elements.welcome.hidden = false;
+    await renderHistory();
+    showToast("Saved chats cleared.");
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+elements.clearProjects.addEventListener("click", async () => {
+  if (!window.confirm("Delete recent project paths from this browser? This does not delete project folders.")) return;
+  localStorage.removeItem("coder.recentProjects");
+  try {
+    const database = await openHistoryDb();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction("chats", "readwrite");
+      const cursorRequest = transaction.objectStore("chats").openCursor();
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        const chat = cursor.value;
+        if (chat.projectRoot) {
+          chat.projectRoot = null;
+          cursor.update(chat);
+        }
+        cursor.continue();
+      };
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error("Could not clear saved project paths."));
+      transaction.onabort = () => reject(transaction.error || new Error("Could not clear saved project paths."));
+    });
+    await renderHistory();
+    showToast("Recent project paths cleared.");
+  } catch (error) {
+    showToast(`Recent project paths were removed from the list, but saved chat metadata could not be cleared: ${error.message}`);
+  }
+});
 elements.webButton.addEventListener("click", () => elements.webDialog.showModal());
 elements.webSearchForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1052,6 +1163,13 @@ elements.selectVisible.addEventListener("click", () => {
 });
 elements.refresh.addEventListener("click", refreshModels);
 elements.model.addEventListener("change", updateSendButton);
+elements.largeModel.addEventListener("change", updateSendButton);
+elements.workflow.addEventListener("change", () => {
+  if (elements.workflow.value === "chain" && elements.largeModel.disabled) {
+    showToast("Chain needs two different models installed in local Ollama.");
+  }
+  updateSendButton();
+});
 elements.prompt.addEventListener("input", () => {
   resizePrompt();
   updateSendButton();
@@ -1366,8 +1484,75 @@ if (window.matchMedia("(display-mode: standalone)").matches) elements.install.hi
 
 async function initialize() {
   if (!await connectLocalCompanion()) return;
+  const approvalId = new URLSearchParams(window.location.search).get("approval");
+  if (approvalId) {
+    await showLocalApproval(approvalId);
+    return;
+  }
   await loadStatus();
   await refreshModels();
+}
+
+async function showLocalApproval(approvalId) {
+  const panel = document.createElement("main");
+  panel.className = "local-approval-panel";
+  const title = document.createElement("h1");
+  title.textContent = "Review proposed action";
+  const status = document.createElement("p");
+  status.className = "local-approval-status";
+  status.textContent = "Loading the pending action from the local companion…";
+  panel.append(title, status);
+  document.body.replaceChildren(panel);
+  if (window.location.protocol !== "http:" || window.location.hostname !== "127.0.0.1" || !/^[A-Za-z0-9_-]{24,100}$/.test(approvalId)) {
+    status.textContent = "This approval can only be reviewed in the local LCM companion.";
+    return;
+  }
+  try {
+    const response = await request(`/api/approval/${encodeURIComponent(approvalId)}`);
+    const { action } = await response.json();
+    if (!action || !["write_file", "run_command"].includes(action.kind)) throw new Error("The local companion returned an invalid action.");
+    const details = document.createElement("pre");
+    details.className = "local-approval-details";
+    if (action.kind === "run_command") {
+      details.textContent = `Command:\n${action.command}\n\nWorking directory:\n${action.root}\n\nThis runs as your Windows account and can access files and services available to that account.`;
+    } else {
+      details.textContent = `File: ${action.path}\nProject: ${action.root}\n\n--- Current file ---\n${action.before || "[new file]"}\n\n--- Proposed file ---\n${action.content}`;
+    }
+    const actions = document.createElement("div");
+    actions.className = "local-approval-actions";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "button button-primary";
+    approve.textContent = action.kind === "run_command" ? "Approve and run command" : "Approve file change";
+    const deny = document.createElement("button");
+    deny.type = "button";
+    deny.className = "button";
+    deny.textContent = "Deny";
+    actions.append(approve, deny);
+    panel.replaceChildren(title, status, details, actions);
+    const resolve = async (approved) => {
+      approve.disabled = deny.disabled = true;
+      try {
+        const resolution = await request("/api/approval/resolve", { method: "POST", body: JSON.stringify({ id: approvalId, approved }) });
+        const outcome = await resolution.json();
+        actions.remove();
+        if (approved && outcome.result) {
+          details.textContent = `Action result:\n${JSON.stringify(outcome.result, null, 2)}`;
+          status.textContent = outcome.result.error ? "The action was approved but could not be completed." : "The approved action finished.";
+        } else {
+          details.remove();
+          status.textContent = approved ? "Approval sent to the Chain action runner." : "Action denied. Nothing was changed or run.";
+        }
+      } catch (error) {
+        approve.disabled = deny.disabled = false;
+        status.textContent = error.message;
+      }
+    };
+    approve.addEventListener("click", () => resolve(true));
+    deny.addEventListener("click", () => resolve(false));
+  } catch (error) {
+    status.textContent = error.message;
+  }
 }
 
 initialize();

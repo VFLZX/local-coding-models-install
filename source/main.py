@@ -20,6 +20,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from coder.context import ContextError
+from coder.agent import ChainAgent
+from coder.approvals import ApprovalManager
 from coder.entitlement import (
     EntitlementError,
     entitlement_path,
@@ -33,9 +35,9 @@ from coder.web_access import WebAccessClient, WebAccessError
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 HOST = "127.0.0.1"
 PORT = 0
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 PUBLIC_APP_ORIGIN = "https://vflzx.github.io"
-PUBLIC_APP_URL = f"{PUBLIC_APP_ORIGIN}/local-coding-models/"
+PUBLIC_APP_URL = f"{PUBLIC_APP_ORIGIN}/local-coding-models-install/?coder-version={APP_VERSION}"
 SYSTEM_PROMPT = """You are LCM (Local Coding Models), a careful local coding assistant.
 Help the user understand, design, debug, and write code. Use explicitly selected
 project files and web pages as evidence when provided; do not claim to have
@@ -84,6 +86,7 @@ class CoderServer(ThreadingHTTPServer):
         super().__init__(address, CoderRequestHandler)
         self.token = secrets.token_urlsafe(32)
         self.ollama = OllamaClient()
+        self.approvals = ApprovalManager()
         self.web_access = WebAccessClient()
         self.project_root: Path | None = None
         self.github_username: str | None = None
@@ -103,7 +106,10 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def log_message(self, format: str, *args) -> None:
-        print(f"[LCM] {self.address_string()} - {format % args}")
+        safe_args = list(args)
+        if safe_args and isinstance(safe_args[0], str):
+            safe_args[0] = _redact_request_line(safe_args[0])
+        print(f"[LCM] {self.address_string()} - {format % tuple(safe_args)}")
 
     def do_GET(self) -> None:
         if not self._is_local_request():
@@ -114,6 +120,14 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {"token": self.server.token, "app_version": APP_VERSION},
             )
+        if path.startswith("/api/approval/"):
+            if not self._is_companion_origin() or not self._has_session_token():
+                return self._send_json(HTTPStatus.FORBIDDEN, {"error": "Approvals are available only from the local companion."})
+            request_id = path.rsplit("/", 1)[-1]
+            action = self.server.approvals.get(request_id)
+            if action is None:
+                return self._send_json(HTTPStatus.NOT_FOUND, {"error": "This approval expired or was already resolved."})
+            return self._send_json(HTTPStatus.OK, {"action": action})
         if path == "/api/status":
             try:
                 unlocked = is_unlimited_unlocked()
@@ -268,7 +282,7 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
             if length <= 0:
                 raise ValueError("The request body is empty.")
             request_path = urlsplit(self.path).path
-            if length > MAX_REQUEST_BYTES and request_path != "/api/chat":
+            if length > MAX_REQUEST_BYTES:
                 self.close_connection = True
                 return self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "The request is too large."})
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -282,6 +296,23 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
             return self._redeem_code(payload)
         if path == "/api/chat":
             return self._chat(payload)
+        if path == "/api/approval/resolve":
+            if not self._is_companion_origin():
+                return self._send_json(HTTPStatus.FORBIDDEN, {"error": "Only the local companion can resolve an approval."})
+            request_id = payload.get("id")
+            approved = payload.get("approved")
+            if not isinstance(request_id, str) or not isinstance(approved, bool):
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "The approval response is invalid."})
+            action = self.server.approvals.get(request_id)
+            if not self.server.approvals.resolve(request_id, approved):
+                return self._send_json(HTTPStatus.CONFLICT, {"error": "This approval expired or was already resolved."})
+            if approved and action and action.get("source") == "manual":
+                return self._send_json(HTTPStatus.OK, {"resolved": True, "result": self._perform_approved_action(action)})
+            return self._send_json(HTTPStatus.OK, {"resolved": True})
+        if path == "/api/action/propose":
+            return self._propose_manual_action(payload)
+        if path == "/api/chain":
+            return self._chain(payload)
         if path == "/api/project/select":
             return self._select_project()
         if path == "/api/project/open":
@@ -305,6 +336,92 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
         return secrets.compare_digest(
             self.headers.get("X-Coder-Token", ""), self.server.token
         )
+
+    def _is_companion_origin(self) -> bool:
+        expected = f"http://{HOST}:{self.server.server_port}"
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            return origin == expected
+        referer = self.headers.get("Referer", "")
+        return urllib.parse.urlsplit(referer).scheme == "http" and urllib.parse.urlsplit(referer).netloc == f"{HOST}:{self.server.server_port}"
+
+    def _propose_manual_action(self, payload: dict) -> None:
+        root = self.server.project_root
+        if root is None or payload.get("root") != str(root):
+            return self._send_json(HTTPStatus.CONFLICT, {"error": "Choose the current project folder again."})
+        kind = payload.get("kind")
+        if kind == "write_file":
+            relative_path, content = payload.get("path"), payload.get("content")
+            expected = payload.get("expected_sha256")
+            if not isinstance(relative_path, str) or not isinstance(content, str):
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "The proposed file action is invalid."})
+            if len(content.encode("utf-8")) > MAX_EDIT_BYTES or "\0" in content:
+                return self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "The file must be UTF-8 text no larger than 1 MiB."})
+            try:
+                path = self._project_path(relative_path)
+                if path.exists():
+                    old_data = path.read_bytes()
+                    if len(old_data) > MAX_EDIT_BYTES or not isinstance(expected, str) or hashlib.sha256(old_data).hexdigest() != expected:
+                        return self._send_json(HTTPStatus.CONFLICT, {"error": "The file changed or is too large. Reopen it and review again."})
+                    before = old_data.decode("utf-8")
+                else:
+                    if expected is not None:
+                        return self._send_json(HTTPStatus.CONFLICT, {"error": "The destination file no longer exists."})
+                    before = ""
+            except (ValueError, OSError, UnicodeDecodeError) as error:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Could not verify the file: {error}"})
+            action = {"kind": kind, "source": "manual", "root": str(root), "path": relative_path, "content": content, "expected_sha256": expected, "before": before}
+        elif kind == "run_command":
+            command = payload.get("command")
+            if not isinstance(command, str) or not command.strip() or len(command) > MAX_COMMAND_CHARS:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "The command is invalid."})
+            try:
+                _parse_command(command)
+            except ValueError as error:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            action = {"kind": kind, "source": "manual", "root": str(root), "command": command}
+        else:
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose one supported project action."})
+        try:
+            request_id = self.server.approvals.create(action)
+        except ValueError as error:
+            return self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": str(error)})
+        url = f"http://{HOST}:{self.server.server_port}/?approval={request_id}"
+        return self._send_json(HTTPStatus.ACCEPTED, {"approval_required": {"id": request_id, "kind": kind, "url": url}})
+
+    def _perform_approved_action(self, action: dict) -> dict:
+        root = self.server.project_root
+        if root is None or str(root) != action.get("root"):
+            return {"error": "The selected project changed. No action was run."}
+        if action.get("kind") == "write_file":
+            temporary = None
+            try:
+                path = self._project_path(action["path"])
+                data = action["content"].encode("utf-8")
+                expected = action.get("expected_sha256")
+                if expected is None:
+                    if path.exists():
+                        return {"error": "The destination appeared after review; no write occurred."}
+                elif not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                    return {"error": "The file changed after review; no write occurred."}
+                if not path.parent.is_dir():
+                    return {"error": "The destination folder does not exist."}
+                with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".lcm-", delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(data)
+                os.replace(temporary, path)
+                return {"saved": action["path"]}
+            except (OSError, ValueError, KeyError) as error:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+                return {"error": f"File write failed: {error}"}
+        if action.get("kind") == "run_command":
+            try:
+                result = _run_bounded_command(_parse_command(action["command"]), root)
+                return result
+            except (OSError, ValueError, KeyError) as error:
+                return {"error": f"Command failed: {error}"}
+        return {"error": "Unknown action."}
 
     def _select_project(self) -> None:
         try:
@@ -430,6 +547,8 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
     def _write_project_file(self, payload: dict) -> None:
         relative_path, content = payload.get("path"), payload.get("content")
         root = self.server.project_root
+        if not self._is_companion_origin():
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "File changes must be approved by the local companion."})
         if (
             root is None
             or payload.get("approved_root") != str(root)
@@ -472,6 +591,8 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
     def _run_project_command(self, payload: dict) -> None:
         root = self.server.project_root
         command = payload.get("command")
+        if not self._is_companion_origin():
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "Commands must be approved by the local companion."})
         if root is None:
             return self._send_json(HTTPStatus.CONFLICT, {"error": "Choose a project folder first."})
         if (
@@ -485,26 +606,11 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
             return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Review and approve the exact command and working folder before running it."})
         try:
             arguments = _parse_command(command)
-            result = subprocess.run(
-                arguments,
-                cwd=root,
-                shell=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                check=False,
-            )
-            stdout = result.stdout
-            stderr = result.stderr
-            exit_code = result.returncode
-            timed_out = False
-        except subprocess.TimeoutExpired as error:
-            stdout = _decode_output(error.stdout)
-            stderr = _decode_output(error.stderr)
-            exit_code = None
-            timed_out = True
+            result = _run_bounded_command(arguments, root)
+            stdout = result["stdout"]
+            stderr = result["stderr"]
+            exit_code = result["exit_code"]
+            timed_out = result["timed_out"]
         except (OSError, ValueError) as error:
             return self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Could not run that command: {error}"})
         self._send_json(
@@ -514,6 +620,8 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
                 "timed_out": timed_out,
                 "stdout": stdout[-MAX_COMMAND_OUTPUT_BYTES:],
                 "stderr": stderr[-MAX_COMMAND_OUTPUT_BYTES:],
+                "stdout_truncated": result.get("stdout_truncated", False),
+                "stderr_truncated": result.get("stderr_truncated", False),
             },
         )
 
@@ -711,6 +819,119 @@ class CoderRequestHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _chain(self, payload: dict) -> None:
+        small, large = payload.get("small_model"), payload.get("large_model")
+        messages, files = payload.get("messages"), payload.get("files", [])
+        if any(not isinstance(name, str) or not name.strip() or len(name) > 256 for name in (small, large)):
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose small and large local Ollama models."})
+        if small == large:
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Choose two different models for Chain."})
+        if not isinstance(messages, list) or not messages or len(messages) > 200 or not isinstance(files, list):
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Chain messages or selected files are invalid."})
+        clean = []
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"} or not isinstance(message.get("content"), str):
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Chain messages are invalid."})
+            clean.append({"role": message["role"], "content": message["content"]})
+        if clean[-1]["role"] != "user":
+            return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "The latest Chain message must be from you."})
+        try:
+            unlocked = is_unlimited_unlocked()
+            context, notices = self._collect_selected_files(files, unlocked)
+            available = self.server.ollama.list_models()
+            if small not in available or large not in available:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Both Chain models must be installed in local Ollama."})
+        except (ContextError, EntitlementError, OllamaError) as error:
+            return self._send_json(HTTPStatus.SERVICE_UNAVAILABLE if isinstance(error, OllamaError) else HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self._send_cors_headers()
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            for notice in notices:
+                self._write_chunk({"notice": notice})
+            answer = ChainAgent(self.server.ollama, self._execute_chain_tool).run(
+                small, large, clean, context,
+                lambda event: self._write_chunk(event),
+            )
+            self._write_chunk({"done": True, "answer": answer})
+        except (OllamaError, ValueError, OSError) as error:
+            self._write_chunk({"error": str(error)})
+        finally:
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    def _execute_chain_tool(self, name: str, args: dict, emit) -> dict:
+        root = self.server.project_root
+        if root is None:
+            return {"error": "Choose a project folder before using project tools."}
+        if name == "list_project_files":
+            items = []
+            for current, dirs, files in os.walk(root, followlinks=False):
+                base = Path(current)
+                dirs[:] = [d for d in dirs if d not in IGNORED_DIRECTORIES and not (base / d).is_symlink()]
+                for filename in files:
+                    path = base / filename
+                    if not path.is_symlink() and path.is_file():
+                        items.append(path.relative_to(root).as_posix())
+                        if len(items) >= 1000:
+                            return {"files": items, "truncated": True}
+            return {"files": sorted(items, key=str.casefold), "truncated": False}
+        if name == "read_project_file":
+            try:
+                path = self._project_path(args.get("path"))
+                data = path.read_bytes()
+                if len(data) > MAX_EDIT_BYTES:
+                    return {"error": "File exceeds the 1 MiB read limit."}
+                content = data.decode("utf-8")
+                if "\0" in content:
+                    return {"error": "Binary files cannot be read by Chain."}
+                return {"path": args["path"], "content": content, "sha256": hashlib.sha256(data).hexdigest()}
+            except (KeyError, ValueError, OSError, UnicodeDecodeError) as error:
+                return {"error": f"Could not read project file: {error}"}
+        if name not in {"write_project_file", "run_project_command"}:
+            return {"error": "Unknown project tool."}
+        if name == "write_project_file":
+            action = {"kind": "write_file", "root": str(root), "path": args.get("path"), "content": args.get("content"), "expected_sha256": args.get("expected_sha256")}
+            if not isinstance(action["path"], str) or not isinstance(action["content"], str):
+                return {"error": "The proposed file action is malformed."}
+            try:
+                path = self._project_path(action["path"])
+                if path.exists():
+                    old_data = path.read_bytes()
+                    if len(old_data) > MAX_EDIT_BYTES:
+                        return {"error": "Files over 1 MiB cannot be changed by Chain."}
+                    if not isinstance(action["expected_sha256"], str) or hashlib.sha256(old_data).hexdigest() != action["expected_sha256"]:
+                        return {"error": "Read the current file first and provide its exact SHA-256 before proposing a replacement."}
+                    action["before"] = old_data.decode("utf-8")
+                elif action["expected_sha256"] is not None:
+                    return {"error": "The expected file version was supplied, but the destination does not exist."}
+                else:
+                    action["before"] = ""
+            except ValueError as error:
+                return {"error": str(error)}
+            except (OSError, UnicodeDecodeError) as error:
+                return {"error": f"Could not verify the current file: {error}"}
+            if len(action["content"].encode("utf-8")) > MAX_EDIT_BYTES or "\0" in action["content"]:
+                return {"error": "The proposed file exceeds the 1 MiB UTF-8 text limit."}
+        else:
+            command = args.get("command")
+            if not isinstance(command, str) or not command.strip() or len(command) > MAX_COMMAND_CHARS:
+                return {"error": "The proposed command is invalid."}
+            action = {"kind": "run_command", "root": str(root), "command": command}
+        request_id = self.server.approvals.create(action)
+        approval_url = f"http://{HOST}:{self.server.server_port}/?approval={request_id}"
+        emit({"approval_required": {"id": request_id, "kind": action["kind"], "url": approval_url}})
+        if not self.server.approvals.wait(request_id):
+            return {"approved": False, "message": "The user denied or the approval expired. No action was run."}
+        return {"approved": True, **self._perform_approved_action(action)}
+
     def _collect_selected_files(self, files: list, unlimited: bool) -> tuple[str, list[str]]:
         from coder.context import MAX_CONTEXT_FILE_BYTES, MAX_CONTEXT_FILES, MAX_CONTEXT_TOTAL_BYTES
 
@@ -833,6 +1054,84 @@ def _decode_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _redact_request_line(line: str) -> str:
+    """Remove sensitive query parameters from web page reader access logs."""
+    parts = line.split(" ", 2)
+    if len(parts) != 3:
+        return line
+    try:
+        parsed = urlsplit(parts[1])
+    except ValueError:
+        return line
+    if parsed.path.startswith("/api/web/"):
+        return f"{parts[0]} {parsed.path} {parts[2]}"
+    return line
+
+
+def _run_bounded_command(arguments: list[str], cwd: Path | str, timeout: int = COMMAND_TIMEOUT_SECONDS) -> dict:
+    """Drain child output continuously while retaining at most the configured bytes."""
+    process = subprocess.Popen(
+        arguments,
+        cwd=cwd,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    truncated = {"stdout": False, "stderr": False}
+
+    def drain(name: str, stream) -> None:
+        while True:
+            block = stream.read(4096)
+            if not block:
+                break
+            remaining = MAX_COMMAND_OUTPUT_BYTES - len(buffers[name])
+            if remaining > 0:
+                buffers[name].extend(block[:remaining])
+            if len(block) > max(0, remaining):
+                truncated[name] = True
+
+    readers = [
+        threading.Thread(target=drain, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=drain, args=("stderr", process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+    for reader in readers:
+        reader.join(timeout=2)
+    for stream in (process.stdout, process.stderr):
+        if stream:
+            stream.close()
+    return {
+        "exit_code": None if timed_out else process.returncode,
+        "timed_out": timed_out,
+        "stdout": bytes(buffers["stdout"]).decode("utf-8", errors="replace"),
+        "stderr": bytes(buffers["stderr"]).decode("utf-8", errors="replace"),
+        "stdout_truncated": truncated["stdout"],
+        "stderr_truncated": truncated["stderr"],
+    }
 
 
 def _github_post_form(url: str, values: dict[str, str]) -> dict:
